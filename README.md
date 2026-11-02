@@ -79,8 +79,10 @@ You need a Cloudflare account and Node 20+.
    npx wrangler secret put DASHBOARD_PASSWORD
    ```
 
-5. Set up alerts: [Resend](https://resend.com) for email, and optionally a
-   Slack or Discord incoming webhook:
+5. Set up alerts. For phone calls, set up PagerDuty (see
+   [Phone calls with PagerDuty](#phone-calls-with-pagerduty) below). For
+   email, use [Resend](https://resend.com). A Slack or Discord incoming
+   webhook is optional:
 
    ```bash
    npx wrangler secret put RESEND_API_KEY
@@ -119,6 +121,47 @@ Each site needs the `/api/health` route merged and deployed:
 Until a site has the route, its health check returns 404 and the site shows
 as **down**. To monitor a site by its homepage alone in the meantime, set
 `healthPath: null` for it in `src/config.ts`.
+
+## Phone calls with PagerDuty
+
+The free PagerDuty plan includes up to 5 users and 100 phone/SMS
+notifications a month; push and email are unlimited. Phone and SMS coverage
+on the free plan varies by country, so check yours.
+
+1. Sign up at pagerduty.com and choose the **Free** plan.
+2. In **My Profile → Contact Information**, add and verify your mobile
+   number. In **Notification Rules**, set "High-urgency incidents" to
+   **Phone call** immediately, then **SMS** after 1 minute, then
+   **Push** after 2 minutes. Install the PagerDuty app for push and
+   one-tap acknowledge.
+3. Go to **Services → Service Directory → New Service** and name it
+   "Pura Group storefronts". Use the default escalation policy (which pages
+   you), and set urgency to **High, follow escalation rules**.
+4. On the integrations step, add **Events API V2**. Copy the
+   **Integration Key** (32 characters).
+5. Store it as a secret. It takes effect immediately, with no redeploy:
+
+   ```bash
+   npx wrangler secret put PAGERDUTY_ROUTING_KEY
+   ```
+
+6. On the dashboard, open **Alert channels**. PagerDuty should read **On**.
+   Press **Send test alert**: your phone should ring within about a
+   minute. Resolve the test incident in the PagerDuty app.
+
+How it behaves:
+- When a site goes down, it **triggers** one incident per outage. PagerDuty
+  then calls, texts and escalates on its own until someone acknowledges.
+- When the site recovers, the watcher **resolves** that incident, so the
+  calls stop.
+- The hourly reminder isn't sent to PagerDuty, because PagerDuty already
+  re-notifies an open incident.
+- A failed send to PagerDuty is retried once. A remaining failure shows as
+  a red banner on the dashboard.
+
+To add a teammate, invite them in PagerDuty (**People → Users**) and put
+them on the escalation policy. Everything about who gets called, and when,
+lives in PagerDuty.
 
 ## How alerting works
 

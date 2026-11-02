@@ -63,24 +63,27 @@ async function record(env: Env, check: SiteCheck, now: number): Promise<void> {
   let lastAlertAt = decision.next.lastAlertAt;
   let alertError: string | null | undefined;
   if (decision.alert) {
-    const alert = buildAlert({
+    const downSince = decision.alert === 'recovered' ? prev.downSince : decision.next.downSince;
+    const input = {
       kind: decision.alert,
       site,
       now,
-      downSince: decision.alert === 'recovered' ? prev.downSince : decision.next.downSince,
+      downSince,
       results,
       dashboardUrl: env.DASHBOARD_URL || null,
-      timeZone: timezone(env),
-    });
-    const sent = await sendAlert(env, recipientsFor(site, env), alert);
-    alertError = sent.ok ? null : sent.error ?? 'failed to send';
+    };
+    const alert = buildAlert({ ...input, timeZone: timezone(env) });
+    const sent = await sendAlert(env, recipientsFor(site, env), alert, input);
+    // Keep partial failures too (e.g. email went out but PagerDuty didn't),
+    // so the dashboard shows them.
+    alertError = sent.error ?? (sent.ok ? null : 'failed to send');
     if (sent.ok && decision.alert !== 'recovered') {
       lastAlertAt = now;
       if (incidentId !== null) {
         await db.prepare('UPDATE incidents SET alerts_sent = alerts_sent + 1 WHERE id = ?').bind(incidentId).run();
       }
     }
-    if (!sent.ok) console.error(`[alert] ${site.id} ${decision.alert}: ${alertError}`);
+    if (alertError) console.error(`[alert] ${site.id} ${decision.alert}: ${alertError}`);
   }
 
   if (decision.closeIncident && incidentId !== null) {

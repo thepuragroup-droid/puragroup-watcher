@@ -1,6 +1,7 @@
 import type { SiteConfig } from '../config.ts';
 import type { Env } from '../env.ts';
 import { formatDuration, type AlertKind, type TargetResult } from './logic.ts';
+import { pagerDutyEvent, sendPagerDuty, type PdInput } from './pagerduty.ts';
 
 export interface AlertInput {
   kind: AlertKind | 'test';
@@ -63,14 +64,15 @@ export function buildAlert(input: AlertInput): { subject: string; text: string; 
       color: '#1E6B4F',
     },
     test: {
-      subject: `Test alert: ${site.name} (${h})`,
+      subject: 'Test alert from Pura Watcher',
       title: 'Alert test',
       lead: 'This is a test from Pura Watcher. Real alerts look like this and go to the same people.',
       color: '#173F3A',
     },
   }[kind];
 
-  const link = input.dashboardUrl ? `${input.dashboardUrl.replace(/\/+$/, '')}/sites/${site.id}` : null;
+  const base = input.dashboardUrl ? input.dashboardUrl.replace(/\/+$/, '') : null;
+  const link = base ? (kind === 'test' ? `${base}/` : `${base}/sites/${site.id}`) : null;
   const rows = input.results.map((r) => {
     const label = r.kind === 'health' ? 'Health check' : 'Homepage';
     const detail = r.ok ? `HTTP ${r.code} in ${r.ms} ms` : r.error ?? 'failed';
@@ -111,7 +113,7 @@ export function buildAlert(input: AlertInput): { subject: string; text: string; 
         )
         .join('')}
     </table>
-    ${link ? `<p style="margin:20px 0 0;"><a href="${esc(link)}" style="display:inline-block;padding:9px 14px;background:#173F3A;color:#FFFFFF;border-radius:6px;text-decoration:none;font-size:14px;">Open ${esc(site.name)} on the dashboard</a></p>` : ''}
+    ${link ? `<p style="margin:20px 0 0;"><a href="${esc(link)}" style="display:inline-block;padding:9px 14px;background:#173F3A;color:#FFFFFF;border-radius:6px;text-decoration:none;font-size:14px;">${kind === 'test' ? 'Open the dashboard' : `Open ${esc(site.name)} on the dashboard`}</a></p>` : ''}
   </div>
 </div>
 <p style="max-width:560px;margin:12px auto 0;font-size:12px;color:#6B7773;">Sent by Pura Watcher. Recipients are set per site in the watcher's config.</p>
@@ -121,14 +123,35 @@ export function buildAlert(input: AlertInput): { subject: string; text: string; 
 }
 
 export interface SendResult {
+  /** At least one channel delivered. */
   ok: boolean;
+  /** Problems on any channel, even when another one delivered. */
   error?: string;
 }
 
-/** Email via Resend, plus the optional chat webhook. Never throws. */
-export async function sendAlert(env: Env, to: string[], alert: ReturnType<typeof buildAlert>): Promise<SendResult> {
+/**
+ * Deliver one alert on every configured channel: PagerDuty (phone calls),
+ * the chat webhook, and email via Resend. Never throws.
+ */
+export async function sendAlert(
+  env: Env,
+  to: string[],
+  alert: ReturnType<typeof buildAlert>,
+  pd: PdInput | null = null,
+): Promise<SendResult> {
   const errors: string[] = [];
   let delivered = false;
+
+  if (env.PAGERDUTY_ROUTING_KEY && pd) {
+    const event = pagerDutyEvent(env.PAGERDUTY_ROUTING_KEY, pd);
+    if (event) {
+      const err = await sendPagerDuty(event);
+      if (err) errors.push(err);
+      else delivered = true;
+    } else if (pd.kind === 'reminder') {
+      delivered = true; // PagerDuty keeps re-notifying the open incident itself
+    }
+  }
 
   if (env.ALERT_WEBHOOK_URL) {
     try {
@@ -161,9 +184,9 @@ export async function sendAlert(env: Env, to: string[], alert: ReturnType<typeof
         errors.push(`Resend: ${(e as Error).message}`);
       }
     }
-  } else if (!env.ALERT_WEBHOOK_URL) {
+  } else if (!env.ALERT_WEBHOOK_URL && !env.PAGERDUTY_ROUTING_KEY) {
     errors.push('no recipients configured');
   }
 
-  return delivered ? { ok: true, error: errors.join('; ') || undefined } : { ok: false, error: errors.join('; ') };
+  return { ok: delivered, error: errors.length ? errors.join('; ') : undefined };
 }

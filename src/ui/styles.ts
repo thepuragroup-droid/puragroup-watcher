@@ -311,6 +311,12 @@ tbody tr:last-child td { border-bottom: 0; }
 
 .filters { display: flex; gap: 2px; }
 
+.channels { list-style: none; margin: 0; padding: 0; }
+.channel { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: baseline; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.channel b { font-weight: 600; }
+.channels-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 16px; margin: 0; }
+.channels-foot p { margin: 0; font-size: 13px; }
+
 /* ---------- Login ---------- */
 .login { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--shell); }
 .login form, .login .card { width: 100%; max-width: 360px; background: var(--surface); border-radius: 10px; padding: 28px; }
@@ -363,6 +369,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .incidents td { vertical-align: top; }
   .col-ribbon { min-width: 0; }
   .incidents .hide-sm, .log .hide-sm { display: none; }
+  .channel { grid-template-columns: 56px 1fr; padding-left: 12px; padding-right: 12px; }
   th, td { padding-left: 12px; padding-right: 12px; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats div:nth-child(odd) { border-left: 0; }

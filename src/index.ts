@@ -4,7 +4,7 @@ import { checkLog, lastRunAt, overview, siteHourly, siteIncidents, siteSummary }
 import { dailyAvailability, parseRange } from './data/stats.ts';
 import { timezone, type Env } from './env.ts';
 import { runAll } from './monitor/run.ts';
-import { recipientsFor } from './monitor/alerts.ts';
+import { buildAlert, recipientsFor, sendAlert } from './monitor/alerts.ts';
 import { makeFormatters } from './ui/format.ts';
 import { html } from './ui/html.ts';
 import { plainPage, shell } from './ui/layout.ts';
@@ -36,7 +36,7 @@ function safePath(raw: string | null | undefined, fallback = '/'): string {
 }
 
 function alertsConfigured(env: Env): boolean {
-  if (env.ALERT_WEBHOOK_URL) return true;
+  if (env.ALERT_WEBHOOK_URL || env.PAGERDUTY_ROUTING_KEY) return true;
   const hasRecipients = SITES.some((s) => recipientsFor(s, env).length > 0);
   return Boolean(env.RESEND_API_KEY && env.ALERT_FROM && hasRecipients);
 }
@@ -87,6 +87,25 @@ async function handle(req: Request, env: Env): Promise<Response> {
     return redirect(back.pathname + back.search);
   }
 
+  if (path === '/test-alert' && req.method === 'POST') {
+    if (!sameOrigin(req)) return new Response('Forbidden', { status: 403 });
+    const site = SITES[0];
+    const input = {
+      kind: 'test' as const,
+      site,
+      now,
+      downSince: null,
+      results: [],
+      dashboardUrl: env.DASHBOARD_URL || url.origin,
+    };
+    const everyone = [...new Set(SITES.flatMap((s) => recipientsFor(s, env)))];
+    const sent = await sendAlert(env, everyone, buildAlert({ ...input, timeZone: tz }), input);
+    const back = new URL('/', url.origin);
+    back.searchParams.set('test', sent.ok && !sent.error ? 'ok' : sent.ok ? 'partial' : 'fail');
+    if (sent.error) back.searchParams.set('why', sent.error.slice(0, 300));
+    return redirect(back.pathname + back.search + '#alerts');
+  }
+
   if (req.method !== 'GET') return new Response('Method not allowed', { status: 405 });
 
   const lastRun = await lastRunAt(env);
@@ -102,6 +121,8 @@ async function handle(req: Request, env: Env): Promise<Response> {
   const returnTo = (() => {
     const p = new URLSearchParams(url.search);
     p.delete('ran');
+    p.delete('test');
+    p.delete('why');
     const q = p.toString();
     return url.pathname + (q ? `?${q}` : '');
   })();
@@ -122,7 +143,14 @@ async function handle(req: Request, env: Env): Promise<Response> {
         refreshSeconds: 120,
         returnTo,
         showSignOut,
-        body: overviewBody(data, range, fmt, baseNotices(alertErrors)),
+        body: overviewBody(data, range, fmt, baseNotices(alertErrors), {
+          pagerDuty: Boolean(env.PAGERDUTY_ROUTING_KEY),
+          webhook: Boolean(env.ALERT_WEBHOOK_URL),
+          email: Boolean(env.RESEND_API_KEY && env.ALERT_FROM),
+          recipients: [...new Set(SITES.flatMap((s) => recipientsFor(s, env)))].length,
+          test: url.searchParams.get('test'),
+          why: url.searchParams.get('why'),
+        }),
       }),
     );
   }

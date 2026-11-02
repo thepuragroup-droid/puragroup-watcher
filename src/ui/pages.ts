@@ -89,12 +89,12 @@ function notices(n: Notices, fmt: Formatters): SafeHtml {
   }
   if (!n.alertsConfigured) {
     out.push(
-      html`<div class="banner" role="status">${icon.alert}<p><b>Alerts are off.</b> Outages are recorded but nobody is told. Set <span class="mono">RESEND_API_KEY</span> and <span class="mono">ALERT_FROM</span> (or <span class="mono">ALERT_WEBHOOK_URL</span>), and add recipients to <span class="mono">src/config.ts</span> or <span class="mono">ALERT_EMAILS</span>.</p></div>`,
+      html`<div class="banner" role="status">${icon.alert}<p><b>Alerts are off.</b> Outages are recorded but nobody is told. Set <span class="mono">PAGERDUTY_ROUTING_KEY</span> for phone calls, and/or <span class="mono">RESEND_API_KEY</span> + <span class="mono">ALERT_FROM</span> for email (or <span class="mono">ALERT_WEBHOOK_URL</span>), and add recipients to <span class="mono">src/config.ts</span> or <span class="mono">ALERT_EMAILS</span>.</p></div>`,
     );
   }
   for (const e of n.alertErrors) {
     out.push(
-      html`<div class="banner is-fail" role="alert">${icon.alert}<p><b>The last alert for ${e.site.name} wasn't delivered:</b> ${e.error}</p></div>`,
+      html`<div class="banner is-fail" role="alert">${icon.alert}<p><b>The last alert for ${e.site.name} had a delivery problem:</b> ${e.error}</p></div>`,
     );
   }
   return html`${out}`;
@@ -131,11 +131,47 @@ function incidentsTable(rows: IncidentRow[], now: number, fmt: Formatters, showS
 // Overview
 // ---------------------------------------------------------------------------
 
+export interface Channels {
+  pagerDuty: boolean;
+  webhook: boolean;
+  email: boolean;
+  recipients: number;
+  test: string | null;
+  why: string | null;
+}
+
+function channelsPanel(c: Channels): SafeHtml {
+  const row = (on: boolean, name: string, detail: string) =>
+    html`<li class="channel"><span class="status ${on ? 'is-up' : 'is-unknown'}"><span class="dot"></span>${on ? 'On' : 'Off'}</span><span><b>${name}</b><span class="sub">${detail}</span></span></li>`;
+  const result =
+    c.test === 'ok'
+      ? html`<div class="banner" style="background:var(--pass-wash);color:var(--pass-ink);border-color:transparent;margin:0 16px 16px" role="status"><p><b>Test alert sent on every channel.</b>${c.pagerDuty ? ' PagerDuty should call or notify you within a minute. Resolve the test incident in the PagerDuty app.' : ''}</p></div>`
+      : c.test === 'partial' || c.test === 'fail'
+        ? html`<div class="banner is-fail" style="margin:0 16px 16px" role="alert">${icon.alert}<p><b>${c.test === 'fail' ? 'The test alert was not delivered.' : 'The test alert reached some channels, not all.'}</b> ${c.why ?? ''}</p></div>`
+        : '';
+  return html`<section class="section" id="alerts">
+    <div class="toolbar"><h2>Alert channels</h2></div>
+    <div class="panel">
+      <ul class="channels">
+        ${row(c.pagerDuty, 'PagerDuty', c.pagerDuty ? 'Phone call, SMS and push when a site goes down; auto-resolves on recovery.' : 'Set PAGERDUTY_ROUTING_KEY to get phone calls.')}
+        ${row(c.email && c.recipients > 0, 'Email', c.email ? `${c.recipients} recipient${c.recipients === 1 ? '' : 's'} via Resend.` : 'Set RESEND_API_KEY and ALERT_FROM.')}
+        ${row(c.webhook, 'Slack / Discord', c.webhook ? 'Posts to your incoming webhook.' : 'Optional: set ALERT_WEBHOOK_URL.')}
+      </ul>
+      ${result}
+      <form method="post" action="/test-alert" class="channels-foot">
+        <p class="muted">Sends a clearly marked test through every channel that's on.</p>
+        <button class="btn btn-quiet" type="submit" ${c.pagerDuty || c.webhook || c.email ? '' : html`disabled`}>Send test alert</button>
+      </form>
+    </div>
+  </section>`;
+}
+
 export function overviewBody(
   data: { sites: SiteSummary[]; incidents: IncidentRow[] },
   range: RangeSpec,
   fmt: Formatters,
   n: Notices,
+  channels: Channels,
 ): SafeHtml {
   const rows = data.sites.map((s) => {
     const status = statusOf(s.state);
@@ -187,7 +223,8 @@ export function overviewBody(
     <section class="section">
       <div class="toolbar"><h2>Recent incidents</h2></div>
       <div class="panel">${incidentsTable(data.incidents, n.now, fmt, true)}</div>
-    </section>`;
+    </section>
+    ${channelsPanel(channels)}`;
 }
 
 // ---------------------------------------------------------------------------

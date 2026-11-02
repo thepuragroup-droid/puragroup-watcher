@@ -29,6 +29,7 @@ ALERT_EMAILS = ""
 #   DASHBOARD_PASSWORD  password for the dashboard login
 #   RESEND_API_KEY      sends alert emails through Resend
 #   ALERT_WEBHOOK_URL   optional Slack/Discord incoming-webhook URL
+#   PAGERDUTY_ROUTING_KEY  PagerDuty Events API v2 integration key (phone calls)
 
 [observability]
 enabled = true
