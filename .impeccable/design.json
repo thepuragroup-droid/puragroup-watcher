@@ -1,0 +1,36 @@
+{
+  "name": "Pura Watcher",
+  "source": "src/ui/styles.ts",
+  "mode": "operate",
+  "themes": ["light", "dark (prefers-color-scheme)"],
+  "shadows": {
+    "pop": "0 6px 20px rgba(18, 38, 33, 0.16), 0 1px 3px rgba(18, 38, 33, 0.10)"
+  },
+  "focus": {
+    "ring": "2px solid var(--focus)",
+    "offset": "2px"
+  },
+  "motion": {
+    "duration": "150ms",
+    "easing": "ease",
+    "tooltip": "opacity + 2px translate, 120ms",
+    "reducedMotion": "all transitions disabled"
+  },
+  "browserSurfaces": {
+    "selection": "color-mix(in srgb, var(--accent) 28%, transparent)",
+    "scrollbar": "var(--line-strong) on transparent",
+    "caret": "var(--accent)",
+    "numerals": "tabular-nums on body"
+  },
+  "signature": {
+    "name": "tick ribbon",
+    "file": "src/ui/charts.ts#ribbon",
+    "rules": [
+      "one tick per check (24h) or rollup bucket",
+      "colour = state (pass/slow/partial/down/none), slow when >= 10% of a bucket's checks were slow",
+      "height = median response vs the site's own p95 for the range",
+      "gapless above 150 ticks, 1-unit gap otherwise",
+      "outage bracket + duration label; axis labels yield to outage labels"
+    ]
+  }
+}

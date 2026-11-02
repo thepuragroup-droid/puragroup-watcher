@@ -1,0 +1,21 @@
+{
+  "name": "puragroup-watcher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Uptime monitor and dashboard for The Pura Group storefronts (Cloudflare Workers + D1).",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply puragroup-watcher --local",
+    "db:migrate": "wrangler d1 migrations apply puragroup-watcher --remote",
+    "db:seed:local": "node --experimental-strip-types scripts/seed.ts > .wrangler/seed.sql && wrangler d1 execute puragroup-watcher --local --file .wrangler/seed.sql",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261102.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.156.1"
+  }
+}
