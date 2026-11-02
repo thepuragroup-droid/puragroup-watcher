@@ -216,10 +216,18 @@ export default {
       return await handle(req, env);
     } catch (err) {
       console.error('[fetch]', err);
+      const message = String((err as Error)?.message ?? err).slice(0, 300);
+      const path = new URL(req.url).pathname;
+      // D1 reports a schema older than the code as a missing column/table.
+      const schemaBehind = /no such (column|table)|has no column/i.test(message);
+      const what = path === '/run' ? 'The check run failed.' : "The dashboard couldn't load.";
+      const hint = schemaBehind
+        ? html`The database is missing an update. From the project folder run <span class="mono">npm run db:migrate</span>, then try again. Until then, scheduled checks fail too.`
+        : html`If this keeps happening, run <span class="mono">npx wrangler tail</span> and try again to see the full error.`;
       return page(
         plainPage(
           'Error · Pura Watcher',
-          html`<main class="login"><div class="card"><h1>Something went wrong</h1><p>The dashboard couldn't load. If this is a new deploy, check that the D1 migrations ran (<span class="mono">npm run db:migrate</span>).</p><a class="btn btn-primary" href="/">Try again</a></div></main>`,
+          html`<main class="login"><div class="card"><h1>Something went wrong</h1><p>${what} ${hint}</p><p class="mono" style="background:var(--surface-2);padding:10px 12px;border-radius:6px;color:var(--ink-2);overflow-wrap:anywhere">${message}</p><a class="btn btn-primary" href="/">Back to the dashboard</a></div></main>`,
         ),
         500,
       );
