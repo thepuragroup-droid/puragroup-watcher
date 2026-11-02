@@ -22,6 +22,7 @@ export interface StateRow {
   last_alert_at: number | null;
   last_alert_error: string | null;
   last_checked_at: number | null;
+  pd_error?: string | null;
 }
 
 export interface IncidentRow {

@@ -2,6 +2,7 @@ import { CHECK_RETENTION_DAYS, SITES, type SiteConfig } from '../config.ts';
 import { timezone, type Env } from '../env.ts';
 import { buildAlert, recipientsFor, sendAlert } from './alerts.ts';
 import { checkSite, type SiteCheck } from './check.ts';
+import { pagerDutyEvent, pagerDutySync, sendPagerDuty } from './pagerduty.ts';
 import { decide, describeFailure, INITIAL_STATE, percentile, type SiteState } from './logic.ts';
 import { histOf } from '../data/stats.ts';
 
@@ -15,6 +16,8 @@ interface StateRow {
   down_since: number | null;
   last_alert_at: number | null;
   incident_id: number | null;
+  pd_open_key: string | null;
+  pd_error: string | null;
 }
 
 /** One cron tick: check every site, update state, alert, record. */
@@ -73,9 +76,9 @@ async function record(env: Env, check: SiteCheck, now: number): Promise<void> {
       dashboardUrl: env.DASHBOARD_URL || null,
     };
     const alert = buildAlert({ ...input, timeZone: timezone(env) });
-    const sent = await sendAlert(env, recipientsFor(site, env), alert, input);
-    // Keep partial failures too (e.g. email went out but PagerDuty didn't),
-    // so the dashboard shows them.
+    const sent = await sendAlert(env, recipientsFor(site, env), alert);
+    // Keep partial failures too (e.g. email went out, webhook didn't), so the
+    // dashboard shows them.
     alertError = sent.error ?? (sent.ok ? null : 'failed to send');
     if (sent.ok && decision.alert !== 'recovered') {
       lastAlertAt = now;
@@ -84,6 +87,41 @@ async function record(env: Env, check: SiteCheck, now: number): Promise<void> {
       }
     }
     if (alertError) console.error(`[alert] ${site.id} ${decision.alert}: ${alertError}`);
+  }
+
+  // PagerDuty (phone calls) runs on its own track: retried every run until
+  // PagerDuty accepts it, and never sent twice for the same outage.
+  let pdOpenKey = row?.pd_open_key ?? null;
+  let pdError = row?.pd_error ?? null;
+  if (env.PAGERDUTY_ROUTING_KEY) {
+    const sync = pagerDutySync(site.id, decision.next.status, decision.next.downSince, pdOpenKey);
+    const errors: string[] = [];
+    const pdUrl = env.PAGERDUTY_EVENTS_URL || undefined;
+    if (sync.resolve) {
+      const err = await sendPagerDuty(
+        { routing_key: env.PAGERDUTY_ROUTING_KEY, event_action: 'resolve', dedup_key: sync.resolve },
+        pdUrl,
+      );
+      if (err) errors.push(err);
+      else pdOpenKey = null;
+    }
+    if (sync.trigger) {
+      const event = pagerDutyEvent(env.PAGERDUTY_ROUTING_KEY, {
+        kind: 'down',
+        site,
+        now,
+        downSince: decision.next.downSince,
+        results,
+        dashboardUrl: env.DASHBOARD_URL || null,
+      });
+      const err = event ? await sendPagerDuty(event, pdUrl) : 'could not build PagerDuty event';
+      if (err) errors.push(err);
+      else pdOpenKey = sync.trigger;
+    }
+    if (sync.resolve || sync.trigger) {
+      pdError = errors.length ? errors.join('; ') : null;
+      if (pdError) console.error(`[pagerduty] ${site.id}: ${pdError}`);
+    }
   }
 
   if (decision.closeIncident && incidentId !== null) {
@@ -115,13 +153,13 @@ async function record(env: Env, check: SiteCheck, now: number): Promise<void> {
     db
       .prepare(
         `INSERT INTO site_state (site_id, status, consecutive_failures, failing_since, down_since,
-           last_alert_at, last_alert_error, last_checked_at, incident_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           last_alert_at, last_alert_error, last_checked_at, incident_id, pd_open_key, pd_error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?11, ?12)
          ON CONFLICT (site_id) DO UPDATE SET
            status = ?2, consecutive_failures = ?3, failing_since = ?4, down_since = ?5,
            last_alert_at = ?6,
            last_alert_error = CASE WHEN ?10 = 1 THEN ?7 ELSE site_state.last_alert_error END,
-           last_checked_at = ?8, incident_id = ?9`,
+           last_checked_at = ?8, incident_id = ?9, pd_open_key = ?11, pd_error = ?12`,
       )
       .bind(
         site.id,
@@ -134,6 +172,8 @@ async function record(env: Env, check: SiteCheck, now: number): Promise<void> {
         now,
         incidentId,
         alertError === undefined ? 0 : 1,
+        pdOpenKey,
+        pdError,
       ),
   ]);
 

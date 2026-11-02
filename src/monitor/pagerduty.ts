@@ -8,9 +8,32 @@
  * https://developer.pagerduty.com/docs/events-api-v2/trigger-events/
  */
 import type { SiteConfig } from '../config.ts';
-import type { AlertKind, TargetResult } from './logic.ts';
+import type { AlertKind, SiteStatus, TargetResult } from './logic.ts';
 
 export const PAGERDUTY_URL = 'https://events.pagerduty.com/v2/enqueue';
+
+/**
+ * What to tell PagerDuty after a run, given the site's new state and the
+ * incident PagerDuty has already accepted (if any).
+ *
+ *  - down, nothing accepted yet      -> trigger (retried every run until it lands)
+ *  - down, this outage accepted      -> nothing (one incident = one call)
+ *  - down, a stale earlier outage    -> resolve the old one, trigger the new one
+ *  - up/unknown, something accepted  -> resolve (retried every run until it lands)
+ */
+export function pagerDutySync(
+  siteId: string,
+  status: SiteStatus,
+  downSince: number | null,
+  openKey: string | null,
+): { trigger: string | null; resolve: string | null } {
+  if (status === 'down' && downSince !== null) {
+    const key = dedupKey(siteId, downSince);
+    if (openKey === key) return { trigger: null, resolve: null };
+    return { trigger: key, resolve: openKey };
+  }
+  return { trigger: null, resolve: openKey };
+}
 
 /** One stable key per outage, so the resolve closes the incident the trigger opened. */
 export function dedupKey(siteId: string, downSince: number): string {
@@ -59,9 +82,10 @@ export function pagerDutyEvent(routingKey: string, input: PdInput): Record<strin
     payload: {
       summary: summary.slice(0, 1024),
       source: host,
-      severity: kind === 'test' ? 'info' : 'critical',
+      // The test must take the same path as a real outage (high urgency = phone call).
+      severity: 'critical',
       timestamp: new Date(input.downSince ?? input.now).toISOString(),
-      component: site.name,
+      component: kind === 'test' ? 'Pura Watcher (test)' : site.name,
       group: 'storefronts',
       class: 'uptime',
       custom_details: Object.fromEntries(
@@ -82,12 +106,16 @@ export function pagerDutyEvent(routingKey: string, input: PdInput): Record<strin
  * (the phone call is the alert that matters most). Never throws; returns an
  * error string on failure.
  */
-export async function sendPagerDuty(event: Record<string, unknown>, retryDelayMs = 2000): Promise<string | null> {
+export async function sendPagerDuty(
+  event: Record<string, unknown>,
+  url: string = PAGERDUTY_URL,
+  retryDelayMs = 2000,
+): Promise<string | null> {
   let last = '';
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
     try {
-      const res = await fetch(PAGERDUTY_URL, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(event),

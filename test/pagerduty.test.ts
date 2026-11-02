@@ -34,13 +34,91 @@ test('reminders are left to PagerDuty', () => {
   assert.equal(pagerDutyEvent('KEY', { ...base, kind: 'reminder' }), null);
 });
 
-test('test alerts get their own key and info severity', () => {
+test('test alerts get their own key and page like a real outage', () => {
   const e = pagerDutyEvent('KEY', { ...base, kind: 'test', downSince: null }) as any;
   assert.equal(e.event_action, 'trigger');
   assert.match(e.dedup_key, /^puragroup-watcher\/test\//);
-  assert.equal(e.payload.severity, 'info');
+  assert.equal(e.payload.severity, 'critical');
 });
 
 test('no outage start, no event', () => {
   assert.equal(pagerDutyEvent('KEY', { ...base, kind: 'down', downSince: null }), null);
+});
+
+import { pagerDutySync } from '../src/monitor/pagerduty.ts';
+
+/**
+ * Simulate cron runs: each step is the site's state after the run and
+ * whether PagerDuty accepted what we sent. Returns every event sent.
+ */
+function simulate(steps: Array<{ status: 'up' | 'down'; downSince: number | null; pdUp: boolean }>) {
+  let openKey: string | null = null;
+  const sent: string[] = [];
+  for (const s of steps) {
+    const sync = pagerDutySync('aminoex', s.status, s.downSince, openKey);
+    if (sync.resolve) {
+      sent.push(`resolve ${sync.resolve}${s.pdUp ? '' : ' (failed)'}`);
+      if (s.pdUp) openKey = null;
+    }
+    if (sync.trigger) {
+      sent.push(`trigger ${sync.trigger}${s.pdUp ? '' : ' (failed)'}`);
+      if (s.pdUp) openKey = sync.trigger;
+    }
+  }
+  return sent;
+}
+
+const T = Date.UTC(2026, 10, 2, 12, 0);
+const k = (t: number) => dedupKey('aminoex', t);
+
+test('down for an hour: exactly one trigger (one call), one resolve on recovery', () => {
+  const steps = [
+    { status: 'up' as const, downSince: null, pdUp: true },
+    ...Array.from({ length: 12 }, () => ({ status: 'down' as const, downSince: T, pdUp: true })),
+    { status: 'up' as const, downSince: null, pdUp: true },
+    { status: 'up' as const, downSince: null, pdUp: true },
+  ];
+  assert.deepEqual(simulate(steps), [`trigger ${k(T)}`, `resolve ${k(T)}`]);
+});
+
+test('PagerDuty unreachable at first: trigger retried each run until it lands, then never again', () => {
+  const steps = [
+    { status: 'down' as const, downSince: T, pdUp: false },
+    { status: 'down' as const, downSince: T, pdUp: false },
+    { status: 'down' as const, downSince: T, pdUp: true },
+    { status: 'down' as const, downSince: T, pdUp: true },
+    { status: 'down' as const, downSince: T, pdUp: true },
+  ];
+  assert.deepEqual(simulate(steps), [
+    `trigger ${k(T)} (failed)`,
+    `trigger ${k(T)} (failed)`,
+    `trigger ${k(T)}`,
+  ]);
+});
+
+test('resolve that fails is retried on the next run', () => {
+  const steps = [
+    { status: 'down' as const, downSince: T, pdUp: true },
+    { status: 'up' as const, downSince: null, pdUp: false },
+    { status: 'up' as const, downSince: null, pdUp: true },
+    { status: 'up' as const, downSince: null, pdUp: true },
+  ];
+  assert.deepEqual(simulate(steps), [`trigger ${k(T)}`, `resolve ${k(T)} (failed)`, `resolve ${k(T)}`]);
+});
+
+test('a second, separate outage is a second incident; a stale one is closed first', () => {
+  const T2 = T + 3_600_000;
+  // recovery's resolve failed, then the site went down again
+  const steps = [
+    { status: 'down' as const, downSince: T, pdUp: true },
+    { status: 'up' as const, downSince: null, pdUp: false },
+    { status: 'down' as const, downSince: T2, pdUp: true },
+    { status: 'down' as const, downSince: T2, pdUp: true },
+  ];
+  assert.deepEqual(simulate(steps), [
+    `trigger ${k(T)}`,
+    `resolve ${k(T)} (failed)`,
+    `resolve ${k(T)}`,
+    `trigger ${k(T2)}`,
+  ]);
 });

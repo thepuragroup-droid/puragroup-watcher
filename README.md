@@ -149,15 +149,23 @@ on the free plan varies by country, so check yours.
    Press **Send test alert**: your phone should ring within about a
    minute. Resolve the test incident in the PagerDuty app.
 
-How it behaves:
-- When a site goes down, it **triggers** one incident per outage. PagerDuty
-  then calls, texts and escalates on its own until someone acknowledges.
-- When the site recovers, the watcher **resolves** that incident, so the
-  calls stop.
-- The hourly reminder isn't sent to PagerDuty, because PagerDuty already
-  re-notifies an open incident.
-- A failed send to PagerDuty is retried once. A remaining failure shows as
-  a red banner on the dashboard.
+How it behaves (one outage = one incident = one call):
+- When a site goes down, it **triggers** one incident for that outage. If
+  PagerDuty can't be reached, the trigger is retried on every 5-minute run
+  until PagerDuty accepts it. After that, nothing more is sent for that
+  outage. PagerDuty's own notification rules decide how it contacts you
+  (call, then SMS, then push) and keep going until someone acknowledges.
+- When the site recovers, the watcher **resolves** that incident, retrying
+  the same way until PagerDuty accepts it.
+- If the site comes back and then fails again, that's a new outage and a new
+  incident.
+- If you resolve the incident in PagerDuty while the site is still down, the
+  watcher won't page you again for that outage.
+- PagerDuty runs on its own track: an email or webhook problem never blocks
+  a phone call, and a PagerDuty problem never causes duplicate emails.
+  Failures show as a red banner on the dashboard.
+- **Send test alert** pages exactly like a real outage (critical
+  severity), so if the test calls you, a real outage will too.
 
 To add a teammate, invite them in PagerDuty (**People → Users**) and put
 them on the escalation policy. Everything about who gets called, and when,

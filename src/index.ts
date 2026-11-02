@@ -129,9 +129,10 @@ async function handle(req: Request, env: Env): Promise<Response> {
 
   if (path === '/') {
     const data = await overview(env, range, now);
-    const alertErrors = data.sites.flatMap((s) =>
-      s.state?.last_alert_error ? [{ site: s.site, error: s.state.last_alert_error }] : [],
-    );
+    const alertErrors = data.sites.flatMap((s) => [
+      ...(s.state?.last_alert_error ? [{ site: s.site, error: s.state.last_alert_error }] : []),
+      ...(s.state?.pd_error ? [{ site: s.site, error: s.state.pd_error }] : []),
+    ]);
     const fleet = fleetSentence(data.sites, now);
     const anyDown = data.sites.some((s) => s.state?.status === 'down');
     return page(
@@ -173,7 +174,10 @@ async function handle(req: Request, env: Env): Promise<Response> {
       SITES.map((s) => ({ site: s, state: stateById.get(s.id) ?? null })),
       now,
     );
-    const alertErrors = summary.state?.last_alert_error ? [{ site, error: summary.state.last_alert_error }] : [];
+    const alertErrors = [
+      ...(summary.state?.last_alert_error ? [{ site, error: summary.state.last_alert_error }] : []),
+      ...(summary.state?.pd_error ? [{ site, error: summary.state.pd_error }] : []),
+    ];
     return page(
       shell({
         title: `${summary.state?.status === 'down' ? 'Down · ' : ''}${site.name} · Pura Watcher`,

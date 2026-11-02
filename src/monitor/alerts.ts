@@ -137,23 +137,25 @@ export async function sendAlert(
   env: Env,
   to: string[],
   alert: ReturnType<typeof buildAlert>,
+  /** Only for the dashboard's test alert; outages page PagerDuty via run.ts. */
   pd: PdInput | null = null,
 ): Promise<SendResult> {
   const errors: string[] = [];
   let delivered = false;
+  let attempted = false;
 
   if (env.PAGERDUTY_ROUTING_KEY && pd) {
     const event = pagerDutyEvent(env.PAGERDUTY_ROUTING_KEY, pd);
     if (event) {
-      const err = await sendPagerDuty(event);
+      attempted = true;
+      const err = await sendPagerDuty(event, env.PAGERDUTY_EVENTS_URL || undefined);
       if (err) errors.push(err);
       else delivered = true;
-    } else if (pd.kind === 'reminder') {
-      delivered = true; // PagerDuty keeps re-notifying the open incident itself
     }
   }
 
   if (env.ALERT_WEBHOOK_URL) {
+    attempted = true;
     try {
       // `text` for Slack, `content` for Discord.
       const res = await fetch(env.ALERT_WEBHOOK_URL, {
@@ -169,6 +171,7 @@ export async function sendAlert(
   }
 
   if (to.length > 0) {
+    attempted = true;
     if (!env.RESEND_API_KEY || !env.ALERT_FROM) {
       errors.push('email not configured (RESEND_API_KEY / ALERT_FROM)');
     } else {
@@ -184,9 +187,12 @@ export async function sendAlert(
         errors.push(`Resend: ${(e as Error).message}`);
       }
     }
-  } else if (!env.ALERT_WEBHOOK_URL && !env.PAGERDUTY_ROUTING_KEY) {
-    errors.push('no recipients configured');
   }
 
+  if (!attempted) {
+    // Nothing to send here. Fine when PagerDuty is set up (the run loop pages
+    // it separately); otherwise nobody is being told.
+    return env.PAGERDUTY_ROUTING_KEY ? { ok: true } : { ok: false, error: 'no recipients configured' };
+  }
   return { ok: delivered, error: errors.length ? errors.join('; ') : undefined };
 }
