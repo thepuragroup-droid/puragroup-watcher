@@ -12,6 +12,11 @@
  *   failureThreshold  failed runs (5 min apart, each already retried once)
  *                     before an outage is declared. 1 = alert on first failed run.
  *   reminderMinutes   re-alert interval while still down; 0 = never
+ *   vercelProjectIds  Vercel project ids (prj_…) whose server errors belong to
+ *                     this site. Optional: errors are also matched by request
+ *                     host. The Errors page lists ids that matched no site.
+ *   appDir       folder of the Next.js app inside the repo ('' = repo root);
+ *                tells the fix skill where the code lives
  */
 export interface SiteConfig {
   id: string;
@@ -23,6 +28,8 @@ export interface SiteConfig {
   alertEmails: string[];
   failureThreshold: number;
   reminderMinutes: number;
+  vercelProjectIds: string[];
+  appDir: string;
 }
 
 const defaults = {
@@ -31,6 +38,8 @@ const defaults = {
   alertEmails: [] as string[],
   failureThreshold: 1,
   reminderMinutes: 60,
+  vercelProjectIds: [] as string[],
+  appDir: '',
 };
 
 export const SITES: SiteConfig[] = [
@@ -54,6 +63,7 @@ export const SITES: SiteConfig[] = [
     name: 'PURAMASS',
     url: 'https://puramass.com',
     repo: 'thepuragroup-droid/aminocan-whl',
+    appDir: 'aminocan',
   },
   {
     ...defaults,
@@ -72,3 +82,5 @@ export function findSite(id: string): SiteConfig | undefined {
 export const CHECK_INTERVAL_MS = 5 * 60_000;
 /** Raw checks older than this are deleted (hourly rollups are kept). */
 export const CHECK_RETENTION_DAYS = 90;
+/** Raw error occurrences older than this are deleted (group counts are kept). */
+export const ERROR_EVENT_RETENTION_DAYS = 30;

@@ -1,14 +1,31 @@
 import { authState, clearCookie, passwordMatches, sameOrigin, sessionCookie } from './auth.ts';
 import { findSite, SITES } from './config.ts';
-import { checkLog, lastRunAt, overview, siteHourly, siteIncidents, siteSummary } from './data/queries.ts';
+import { checkLog, lastRunAt, overview, siteHourly, siteIncidents, siteSummary, type StateRow } from './data/queries.ts';
 import { dailyAvailability, parseRange } from './data/stats.ts';
 import { timezone, type Env } from './env.ts';
 import { runAll } from './monitor/run.ts';
 import { buildAlert, recipientsFor, sendAlert } from './monitor/alerts.ts';
 import { makeFormatters } from './ui/format.ts';
 import { html } from './ui/html.ts';
-import { plainPage, shell } from './ui/layout.ts';
-import { fleetSentence, loginPage, overviewBody, setupPage, siteBody, type Notices } from './ui/pages.ts';
+import { icon, plainPage, shell } from './ui/layout.ts';
+import { fleetSentence, loginPage, notices, overviewBody, setupPage, siteBody, type Notices } from './ui/pages.ts';
+import { handleApi } from './errors/api.ts';
+import { handleIngest } from './errors/ingest.ts';
+import {
+  ACTIVE,
+  drainState,
+  errorCountsBySite,
+  getGroup,
+  groupEvents,
+  listGroups,
+  pruneErrorEvents,
+  unmatchedProjects,
+  updateGroup,
+  STATUSES,
+  type ErrorStatus,
+  type Group,
+} from './errors/store.ts';
+import { errorDetailBody, errorsBody, overviewErrorsPanel, parseErrorsQuery, siteErrorsPanel } from './ui/errors.ts';
 
 const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy':
@@ -46,6 +63,12 @@ async function handle(req: Request, env: Env): Promise<Response> {
   const path = url.pathname.replace(/\/+$/, '') || '/';
 
   // ---- Public routes --------------------------------------------------
+  // Vercel Log Drain (signature-checked) and the skills' API (bearer token).
+  if (path === '/ingest/vercel') return jsonGuard(() => handleIngest(req, env));
+  if (path === '/api/sites' || path === '/api/errors' || path.startsWith('/api/errors/')) {
+    return jsonGuard(() => handleApi(req, env, path));
+  }
+
   if (path === '/login') {
     if (env.DASHBOARD_PUBLIC !== '1' && !env.DASHBOARD_PASSWORD) return page(setupPage(), 503);
     if (req.method === 'POST') {
@@ -106,6 +129,17 @@ async function handle(req: Request, env: Env): Promise<Response> {
     return redirect(back.pathname + back.search + '#alerts');
   }
 
+  const statusPost = path.match(/^\/errors\/([0-9a-f]{16})\/status$/);
+  if (statusPost && req.method === 'POST') {
+    if (!sameOrigin(req)) return new Response('Forbidden', { status: 403 });
+    const form = await req.formData();
+    const status = String(form.get('status') ?? '');
+    if (!(STATUSES as readonly string[]).includes(status)) return new Response('Bad status', { status: 400 });
+    const g = await updateGroup(env, statusPost[1], { status: status as ErrorStatus });
+    if (!g) return notFound(tz);
+    return redirect(`/errors/${statusPost[1]}?saved=1`);
+  }
+
   if (req.method !== 'GET') return new Response('Method not allowed', { status: 405 });
 
   const lastRun = await lastRunAt(env);
@@ -128,7 +162,7 @@ async function handle(req: Request, env: Env): Promise<Response> {
   })();
 
   if (path === '/') {
-    const data = await overview(env, range, now);
+    const [data, errorsPanel] = await Promise.all([overview(env, range, now), overviewErrors(env, now)]);
     const alertErrors = data.sites.flatMap((s) => [
       ...(s.state?.last_alert_error ? [{ site: s.site, error: s.state.last_alert_error }] : []),
       ...(s.state?.pd_error ? [{ site: s.site, error: s.state.pd_error }] : []),
@@ -151,7 +185,61 @@ async function handle(req: Request, env: Env): Promise<Response> {
           recipients: [...new Set(SITES.flatMap((s) => recipientsFor(s, env)))].length,
           test: url.searchParams.get('test'),
           why: url.searchParams.get('why'),
-        }),
+        }, errorsPanel),
+      }),
+    );
+  }
+
+  if (path === '/errors') {
+    const q = parseErrorsQuery(url.searchParams);
+    const [groups, everyStatus, counts, drain, unmatched, states] = await Promise.all([
+      listGroups(env, { site: q.site, status: q.status, environment: q.env, q: q.q, limit: 1000 }, now),
+      // Tab counts ignore the status filter but honour the others.
+      listGroups(env, { site: q.site, status: 'all', environment: q.env, q: q.q, limit: 1000 }, now),
+      errorCountsBySite(env, now),
+      drainState(env),
+      unmatchedProjects(env, now),
+      env.DB.prepare('SELECT * FROM site_state').all<StateRow>(),
+    ]);
+    const statusCounts: Record<string, number> = { all: everyStatus.length, active: 0 };
+    for (const g of everyStatus) {
+      statusCounts[g.status] = (statusCounts[g.status] ?? 0) + 1;
+      if (ACTIVE.includes(g.status)) statusCounts.active += 1;
+    }
+    const stateById = new Map(states.results.map((s) => [s.site_id, s]));
+    return page(
+      shell({
+        title: 'Server errors · Pura Watcher',
+        timeZone: tz,
+        fleet: fleetSentence(SITES.map((s) => ({ site: s, state: stateById.get(s.id) ?? null })), now),
+        lastRun,
+        returnTo,
+        showSignOut,
+        current: 'errors',
+        body: errorsBody({ groups, statusCounts, counts, drain, unmatched }, q, now, fmt, notices(baseNotices([]), fmt)),
+      }),
+    );
+  }
+
+  const errorPage = path.match(/^\/errors\/([0-9a-f]{16})$/);
+  if (errorPage) {
+    const [group, events, states] = await Promise.all([
+      getGroup(env, errorPage[1], now),
+      groupEvents(env, errorPage[1], 50),
+      env.DB.prepare('SELECT * FROM site_state').all<StateRow>(),
+    ]);
+    if (!group) return notFound(tz);
+    const stateById = new Map(states.results.map((s) => [s.site_id, s]));
+    return page(
+      shell({
+        title: `${group.title.slice(0, 60)} · Server errors · Pura Watcher`,
+        timeZone: tz,
+        fleet: fleetSentence(SITES.map((s) => ({ site: s, state: stateById.get(s.id) ?? null })), now),
+        lastRun,
+        returnTo,
+        showSignOut,
+        current: 'errors',
+        body: errorDetailBody(group, events, now, fmt, notices(baseNotices([]), fmt), url.searchParams.get('saved') === '1'),
       }),
     );
   }
@@ -162,12 +250,13 @@ async function handle(req: Request, env: Env): Promise<Response> {
     if (!site) return notFound(tz);
     const failuresOnly = url.searchParams.get('log') === 'problems';
     const before = Number(url.searchParams.get('before')) || null;
-    const [summary, incidents, hourly, log, states] = await Promise.all([
+    const [summary, incidents, hourly, log, states, errorsPanel] = await Promise.all([
       siteSummary(env, site, range, now),
       siteIncidents(env, site.id),
       siteHourly(env, site.id, now - 91 * 86_400_000),
       checkLog(env, site.id, { before, failuresOnly }),
       env.DB.prepare('SELECT * FROM site_state').all<NonNullable<Awaited<ReturnType<typeof siteSummary>>['state']>>(),
+      siteErrors(env, site, now, fmt),
     ]);
     const stateById = new Map(states.results.map((s) => [s.site_id, s]));
     const fleet = fleetSentence(
@@ -192,12 +281,70 @@ async function handle(req: Request, env: Env): Promise<Response> {
           range,
           fmt,
           baseNotices(alertErrors),
+          errorsPanel,
         ),
       }),
     );
   }
 
   return notFound(tz);
+}
+
+/** JSON routes report their own failures as JSON, not the HTML error page. */
+async function jsonGuard(fn: () => Promise<Response>): Promise<Response> {
+  try {
+    return await fn();
+  } catch (err) {
+    console.error('[json]', err);
+    const message = String((err as Error)?.message ?? err).slice(0, 300);
+    const hint = /no such (column|table)/i.test(message) ? ' Run `npm run db:migrate`.' : '';
+    return new Response(JSON.stringify({ error: `${message}${hint}` }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+  }
+}
+
+const MIGRATE_HINT = html`<div class="banner" role="status">${icon.alert}<p><b>Server errors are not set up in the database yet.</b> From the project folder run <span class="mono">npm run db:migrate</span>.</p></div>`;
+
+function missingTable(err: unknown): boolean {
+  return /no such (column|table)/i.test(String((err as Error)?.message ?? err));
+}
+
+/** The overview's errors panel. Never takes the uptime dashboard down with it. */
+async function overviewErrors(env: Env, now: number) {
+  try {
+    const [counts, drain, active] = await Promise.all([
+      errorCountsBySite(env, now),
+      drainState(env),
+      listGroups(env, { status: 'active', limit: 1000 }, now),
+    ]);
+    const top = new Map<string, Group>();
+    for (const g of active) {
+      const cur = top.get(g.site_id);
+      if (!cur || g.priority > cur.priority || (g.priority === cur.priority && g.last_24h > cur.last_24h)) top.set(g.site_id, g);
+    }
+    return overviewErrorsPanel(counts, top, drain, now);
+  } catch (err) {
+    if (missingTable(err)) return MIGRATE_HINT;
+    console.error('[overview errors]', err);
+    return html``;
+  }
+}
+
+async function siteErrors(env: Env, site: (typeof SITES)[number], now: number, fmt: ReturnType<typeof makeFormatters>) {
+  try {
+    const [groups, counts, drain] = await Promise.all([
+      listGroups(env, { site: site.id, status: 'active', limit: 200 }, now),
+      errorCountsBySite(env, now),
+      drainState(env),
+    ]);
+    return siteErrorsPanel(site, groups, counts.get(site.id), drain, now, fmt);
+  } catch (err) {
+    if (missingTable(err)) return MIGRATE_HINT;
+    console.error('[site errors]', err);
+    return html``;
+  }
 }
 
 function notFound(_tz: string): Response {
@@ -234,7 +381,11 @@ export default {
     }
   },
 
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // Once an hour is plenty for pruning old error occurrences.
+    if (new Date(event.scheduledTime).getUTCMinutes() < 5) {
+      ctx.waitUntil(pruneErrorEvents(env).catch((err) => console.error('[cron] error prune failed', err)));
+    }
     ctx.waitUntil(
       runAll(env).then(
         (checks) => console.log(`[cron] ${checks.map((c) => `${c.site.id}:${c.ok ? 'ok' : 'FAIL'}`).join(' ')}`),

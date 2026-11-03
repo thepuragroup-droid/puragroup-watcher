@@ -12,6 +12,12 @@ not, which one, since when and why; and over time, how reliable and how fast
 each site is. A link in an alert email often leads them in. Phone use is
 secondary but must work.
 
+## Server errors
+Vercel sends each site's logs here through a Log Drain. Errors are grouped by
+cause on the Errors page. Claude Code skills (`.claude/skills/vercel-errors-*`)
+use `/api/errors` to analyse, score and fix them in the site's own repo. Staff
+mark errors fixed or ignored on the dashboard.
+
 ## Sites watched
 - VYTA Biosciences: www.vytabio.com (repo vyta-rtl-x)
 - Aminocan: www.aminocan.com (repo aminocan-cad)
