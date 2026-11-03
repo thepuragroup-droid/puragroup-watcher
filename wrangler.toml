@@ -30,6 +30,9 @@ ALERT_EMAILS = ""
 #   RESEND_API_KEY      sends alert emails through Resend
 #   ALERT_WEBHOOK_URL   optional Slack/Discord incoming-webhook URL
 #   PAGERDUTY_ROUTING_KEY  PagerDuty Events API v2 integration key (phone calls)
+#   VERCEL_DRAIN_SECRETS   Vercel Log Drain signing secret(s), comma-separated (README → Server errors)
+#   VERCEL_DRAIN_VERIFY    value Vercel asks /ingest/vercel to echo (or team=value pairs)
+#   WATCHER_API_TOKEN      bearer token for /api/errors (Claude Code skills)
 
 [observability]
 enabled = true

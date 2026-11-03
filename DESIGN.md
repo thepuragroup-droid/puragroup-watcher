@@ -202,6 +202,28 @@ not by shadow. The only shadow is the floating hover readout (`--shadow-pop`).
 - **States:** empty states say what will appear and when. Error and setup
   pages use the login card on the pine ground.
 
+- **Top nav:** two links in the shell bar, Uptime and Errors, styled like
+  the range tabs but in shell colours (current = `shell-2` fill).
+- **Errors page:** the page title with drain health under it; a strip of
+  per-site counts (one panel, hairline cells, like the stats strip); status
+  tabs; a filter bar (search, site, environment, sort, group); then one panel
+  per section, each holding one table (priority, error + meta line, 24h, 7d,
+  total, last seen, status). Number columns have fixed widths, so they line
+  up across sections. A regressed row gets the fail-wash tint, like a down
+  site.
+- **Priority badge:** a small bordered box. Uses `fail` colours at ≥75 and
+  `slow` at 50–74; neutral below. An automatic estimate (not yet scored by
+  Claude) has a dashed border and a `~` prefix. Severity and status are
+  coloured words, not pills.
+- **Error detail:** crumbs, the message as the title (20px, wraps), a
+  six-cell stats strip, Root cause and Proposed fix side by side, a Status
+  panel with the actions, the latest message in mono (marked untrusted),
+  then the occurrences log. Claude Code commands are shown in mono with a
+  Copy button.
+- **Overview and site page:** a Server errors table between the sites table
+  and Recent incidents (one row per site), and a top-5 panel above the check
+  log on each site page.
+
 ## Do's and Don'ts
 
 - **Do** keep one table per job. Don't turn site rows into cards, and don't

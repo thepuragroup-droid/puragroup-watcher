@@ -27,6 +27,8 @@ export interface ShellOptions {
   returnTo: string;
   body: SafeHtml;
   showSignOut: boolean;
+  /** Which top-level section is open (for the nav). */
+  current?: 'uptime' | 'errors';
 }
 
 export function shell(o: ShellOptions): string {
@@ -43,6 +45,10 @@ export function shell(o: ShellOptions): string {
 <header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="/">${icon.mark}<span>Pura Watcher</span></a>
+    <nav class="topnav" aria-label="Sections">
+      <a href="/" ${o.current !== 'errors' ? html`aria-current="page"` : ''}>Uptime</a>
+      <a href="/errors" ${o.current === 'errors' ? html`aria-current="page"` : ''}>Errors</a>
+    </nav>
     <div class="fleet" aria-live="polite">${o.fleet}</div>
     <div class="topbar-meta">
       <span class="last-run">Checked <span data-ts="${o.lastRun ?? ''}">${o.lastRun ? relativeText(o.lastRun) : 'never'}</span></span>

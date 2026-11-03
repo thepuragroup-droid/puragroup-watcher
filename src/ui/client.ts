@@ -83,6 +83,22 @@ export const CLIENT_JS = /* js */ `
     });
   });
 
+  // Copy buttons (fingerprints, Claude Code commands).
+  document.querySelectorAll('button[data-copy]').forEach((b) => {
+    b.addEventListener('click', () => {
+      navigator.clipboard?.writeText(b.dataset.copy).then(() => {
+        const was = b.textContent;
+        b.textContent = 'Copied';
+        setTimeout(() => (b.textContent = was), 1500);
+      });
+    });
+  });
+
+  // Error filters apply as soon as a select changes (the Apply button stays for no-JS).
+  document.querySelectorAll('form[data-autosubmit] select').forEach((sel) => {
+    sel.addEventListener('change', () => sel.form.submit());
+  });
+
   // Keep "x min ago" honest without reloading.
   const rel = (t) => {
     const s = Math.round((Date.now() - t) / 1000);

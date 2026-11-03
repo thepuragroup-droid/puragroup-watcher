@@ -73,7 +73,7 @@ export interface Notices {
   ranNow?: boolean;
 }
 
-function notices(n: Notices, fmt: Formatters): SafeHtml {
+export function notices(n: Notices, fmt: Formatters): SafeHtml {
   const out: SafeHtml[] = [];
   if (n.ranNow) {
     out.push(html`<div class="banner" style="background:var(--pass-wash);color:var(--pass-ink);border-color:transparent" role="status"><p>Checks finished just now. The results are below.</p></div>`);
@@ -172,6 +172,7 @@ export function overviewBody(
   fmt: Formatters,
   n: Notices,
   channels: Channels,
+  errorsPanel: SafeHtml | string = '',
 ): SafeHtml {
   const rows = data.sites.map((s) => {
     const status = statusOf(s.state);
@@ -220,6 +221,8 @@ export function overviewBody(
       </table>
     </div>
 
+    ${errorsPanel}
+
     <section class="section">
       <div class="toolbar"><h2>Recent incidents</h2></div>
       <div class="panel">${incidentsTable(data.incidents, n.now, fmt, true)}</div>
@@ -252,7 +255,14 @@ function target(code: number | null, t: number | null): SafeHtml {
   return html`<span class="code ${bad ? 'bad' : ''}">${code ?? 'no reply'}</span> <span class="muted">${ms(t)}</span>`;
 }
 
-export function siteBody(site: SiteConfig, d: SitePageData, range: RangeSpec, fmt: Formatters, n: Notices): SafeHtml {
+export function siteBody(
+  site: SiteConfig,
+  d: SitePageData,
+  range: RangeSpec,
+  fmt: Formatters,
+  n: Notices,
+  errorsPanel: SafeHtml | string = '',
+): SafeHtml {
   const s = d.summary;
   const status = statusOf(s.state);
   const base = `/sites/${site.id}`;
@@ -324,6 +334,8 @@ export function siteBody(site: SiteConfig, d: SitePageData, range: RangeSpec, fm
       </section>
     </div>
 
+    ${errorsPanel}
+
     <section class="section panel" id="log">
       <div class="panel-head">
         <div><h2>Check log</h2><p>Every run, newest first. Health and homepage are checked each time.</p></div>
@@ -366,7 +378,7 @@ export function loginPage(error: boolean, next: string): string {
       <form method="post" action="/login">
         <span style="color:var(--accent)">${icon.mark}</span>
         <h1>Pura Watcher</h1>
-        <p>Uptime for VYTA, Aminocan, PURAMASS and Aminoex.</p>
+        <p>Uptime and server errors for VYTA, Aminocan, PURAMASS and Aminoex.</p>
         <input type="hidden" name="next" value="${next}">
         <label for="pw">Password</label>
         <input id="pw" name="password" type="password" autocomplete="current-password" required autofocus ${error ? html`aria-invalid="true" aria-describedby="pw-err"` : ''}>

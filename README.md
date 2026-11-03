@@ -1,6 +1,7 @@
 # Pura Watcher
 
-Uptime monitoring and a dashboard for The Pura Group's storefronts:
+Uptime monitoring, server-error tracking and a dashboard for The Pura Group's
+storefronts:
 
 | Site | URL | Repo |
 | --- | --- | --- |
@@ -23,6 +24,8 @@ The dashboard shows:
 - a 90-day availability grid
 - an outage history
 - a paginated check log per site
+- **server errors** from Vercel for every site, grouped by cause, scored and
+  tracked to a fix (see [Server errors](#server-errors))
 
 ## Where it runs, and why not Vercel
 
@@ -187,6 +190,142 @@ lives in PagerDuty.
 
 All of these settings are per site in `src/config.ts`.
 
+## Server errors
+
+Every error the four sites log on Vercel (API routes, pages, middleware and
+builds) lands on the **Errors** page. Errors are grouped by cause, sorted by
+priority, and tracked through Open → Analyzed → Fix pending → Fixed. Claude
+Code analyses and fixes them with two skills in this repo.
+
+```
+Vercel (all four projects) ─ Log Drain ─▶ POST /ingest/vercel   signature-checked
+                                            └─ keeps error/fatal lines + 5xx
+                                               └─ D1 error_events ─trigger─▶ error_groups
+Errors page                       grouped by site, severity, route or status; filter, search, sort
+Claude Code /vercel-errors-triage ─ GET/PATCH /api/errors ─▶ root cause, 0–100 score, proposed fix
+Claude Code /vercel-errors-fix    ─ PR in the site's repo ─▶ "Fix pending" ─ verify ─▶ "Fixed"
+```
+
+- **No code in the sites.** The drain is configured in Vercel, so
+  vyta-rtl-x, aminocan-cad, aminocan-whl and aminoex need no changes. It
+  lands here, off Vercel and Supabase, like the uptime checks.
+- **Grouping:** `src/errors/normalize.ts` fingerprints each error from its
+  site, source, route (ids collapsed: `/api/orders/:id`), the first line of
+  the message with variable parts removed (ids, numbers, emails, times), and
+  the first stack frame in the app's own code. One bug hit by a thousand
+  requests is one row. The same message on two routes, or on two sites, is
+  two rows.
+- **Which site:** by Vercel project id (`vercelProjectIds` in
+  `src/config.ts`), falling back to the request host. Lines that match
+  neither, such as builds or preview URLs of a project not listed yet, show
+  under **Unmatched project**. A banner names the project ids to add.
+- **Regressions:** a Fixed error that occurs again is flagged **Regressed**
+  automatically.
+- **Retention:** occurrences are kept 30 days. Group counts and analysis are
+  kept for good.
+- **Priority:** Claude's score once an error is analysed. Before that, an
+  automatic estimate shown as `~NN`, based on revenue paths, 5xx/fatal,
+  volume and recency.
+
+### Setup
+
+1. Create the tables (also part of a normal deploy):
+
+   ```bash
+   npm run db:migrate
+   ```
+
+2. Add the drain in Vercel → **Team Settings → Drains** (older dashboards:
+   *Log Drains*) → Add:
+   - Data: **Logs**. Projects: the four sites (or all projects).
+   - Sources: **Functions**, **Edge** and **Build**. Static and external
+     aren't needed.
+   - Environments: **Production**. Add Preview if you want preview errors
+     too; the page can filter by environment.
+   - Endpoint: `https://<watcher>/ingest/vercel`, format **JSON**, sampling 100%.
+
+   If the sites are in **more than one Vercel team**, add one drain per team,
+   all pointing at the same endpoint, with `?team=<name>` on the URL (see
+   step 3).
+
+3. Store the drain's secrets. These take effect immediately, with no redeploy:
+
+   ```bash
+   npx wrangler secret put VERCEL_DRAIN_SECRETS
+   ```
+
+   ```bash
+   npx wrangler secret put VERCEL_DRAIN_VERIFY
+   ```
+
+   - `VERCEL_DRAIN_SECRETS`: the drain's signing secret. With several teams,
+     comma-separate them: `secretA,secretB`.
+   - `VERCEL_DRAIN_VERIFY`: the verification value Vercel shows when you add
+     the drain. With several teams: `teamA=value1,teamB=value2`, matching
+     each drain URL's `?team=`.
+
+   Then finish adding the drain in Vercel. `GET /ingest/vercel` returns
+   `{"ok":true}` with the `x-vercel-verify` header, so you can check it.
+
+4. Add each site's Vercel project id (Project → Settings → General →
+   Project ID) to `vercelProjectIds` in `src/config.ts`, then
+   `npm run deploy`. Errors still match by host without it, but builds and
+   preview URLs need the id. The Errors page lists any ids it sees but can't
+   place.
+
+5. For Claude Code, create an API token:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+   ```bash
+   npx wrangler secret put WATCHER_API_TOKEN
+   ```
+
+   Then give Claude Code the dashboard address and the token as the
+   environment variables `WATCHER_URL` and `WATCHER_API_TOKEN`. In a Claude
+   Code cloud environment, set them in the environment's settings, and add
+   the Watcher host under **Allowed domains** in its network access settings.
+
+The Errors page shows **Drain connected** once the first batch arrives (even
+a batch with no errors in it). If Vercel's deliveries are refused, a red
+banner says why.
+
+**Cost:** Vercel bills drains by data volume on Pro. It sends every line from
+the chosen sources, and Watcher keeps only the errors, so choose sources and
+environments with that in mind (Vercel → Usage shows the volume). Each batch
+costs Watcher one D1 write per error stored, plus at most one write a minute
+for drain health.
+
+### With Claude Code
+
+| Command | What it does |
+| --- | --- |
+| `/vercel-errors-triage` | Lists every active error, grouped and sorted. Then, for the ones not analysed yet and regressions, it opens the site's repo, finds the cause, scores it 0–100, writes a concrete fix and saves it here. |
+| `/vercel-errors-triage all` / `site aminoex` / `<fp>` | Re-analyse everything, one site, or specific errors (the detail page has copy buttons). |
+| `/vercel-errors-fix <fp>` / `top 3` / `critical` | Implements the recorded fix in the site's repo: re-checks the cause, adds a test, type-checks and builds, opens a draft PR, sets **Fix pending**. |
+| `/vercel-errors-fix verify` | Marks merged fixes **Fixed** once production has been quiet for a day, and reports fixes that didn't work. |
+
+The skills are in `.claude/skills/vercel-errors-*/SKILL.md`. Log text is
+treated as untrusted: instructions inside an error message are never
+followed.
+
+### API
+
+All endpoints require `Authorization: Bearer <WATCHER_API_TOKEN>`. With no
+token set, the API is off.
+
+| Request | Returns |
+| --- | --- |
+| `GET /api/errors?site=&status=active\|all\|<status>&env=&q=&limit=` | groups sorted by priority, drain health, unmatched projects |
+| `GET /api/errors/<fingerprint>` | one group and its latest 50 occurrences |
+| `PATCH /api/errors/<fingerprint>` | update `status`, `score`, `severity`, `category`, `root_cause`, `solution`, `confidence`, `affected_files`, `fix_ref`, `status_note`, `analyzed` (validated in `src/errors/validate.ts`) |
+| `GET /api/sites` | ids, names, repos, app folders |
+
+Each group includes its `site` (repo and `appDir`), so the fix skill knows
+where the code lives.
+
 ## Dashboard notes
 
 - **Tick ribbon:** each tick is one check (24h) or a rollup (1 h for 7d, 6 h
@@ -245,10 +384,13 @@ src/
   index.ts           Worker entry: routes, auth, cron handler
   auth.ts            password login (HMAC-signed cookie)
   monitor/           checks, state machine (logic.ts), alerts, run loop
+  errors/            Vercel drain receiver, fingerprinting, D1 store, API, validation
   data/              D1 queries + pure stats (buckets, histograms, downtime)
   ui/                server-rendered HTML, CSS tokens, SVG charts, small client script
+                     (errors.ts: the Errors pages and panels)
 migrations/          D1 schema
 scripts/seed.ts      synthetic local data
+.claude/skills/      Claude Code skills: vercel-errors-triage, vercel-errors-fix
 test/                unit tests
 ```
 
